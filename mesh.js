@@ -2,9 +2,11 @@
 let meshMaskPixels;
 let meshCols, meshRows;
 let cellData = []; 
+let logoScale = 1; // Tracks how much the logo stretched
 
-// --- OPTIMIZED DENSITY & DETAIL CONTROLS ---
-let gridSize = 16;                
+// --- DENSITY & DETAIL CONTROLS ---
+let baseGridSize = 12;            // Adjust this for CHUNKINESS. (12-16 is usually the sweet spot)
+let gridSize;                     // Will calculate automatically based on the logo size
 let logoInternalDensity = 65;     
 let logoEdgeDensity = 90;         
 let backgroundDensity = 2;        
@@ -15,34 +17,34 @@ const FIELD_DRIFT = -0.006;
 const GLYPH_STATIC_Z = 137.42;
 
 function setupMesh() {
-  updateMeshGrid();
   textAlign(CENTER, CENTER);
   textFont('CursorMono');
   rectMode(CENTER);
   
+  // Order matters here! We must size the mask/scale FIRST, then the grid, then build the data.
   processMeshMask();
+  updateMeshGrid();
   buildCellData(); 
 }
 
 function windowResizedMesh() {
-  updateMeshGrid();
   processMeshMask();
+  updateMeshGrid();
   buildCellData(); 
-}
-
-function updateMeshGrid() {
-  textSize(gridSize * 1.1);
-  meshCols = floor(width / gridSize) + 1;
-  meshRows = floor(height / gridSize) + 1;
 }
 
 function processMeshMask() {
   let baseScale = min(width / logoImg.width, height / logoImg.height) * 0.7;
   let minScale = 400 / max(logoImg.width, 1);
-  let scaleFactor = max(baseScale, minScale);
+  
+  // Save the scale factor so we can scale the grid and noise identically
+  logoScale = max(baseScale, minScale);
 
-  let hrW = floor(logoImg.width * scaleFactor);
-  let hrH = floor(logoImg.height * scaleFactor);
+  // THIS IS THE FIX: The grid size now grows in perfect sync with the logo.
+  gridSize = max(4, floor(baseGridSize * logoScale));
+
+  let hrW = floor(logoImg.width * logoScale);
+  let hrH = floor(logoImg.height * logoScale);
   let hrX = floor((width - hrW) / 2);
   let hrY = floor((height - hrH) / 2);
 
@@ -60,6 +62,12 @@ function processMeshMask() {
     meshMaskPixels[i] = pg.pixels[i * 4] > 128 ? 1 : 0;
   }
   pg.remove();
+}
+
+function updateMeshGrid() {
+  textSize(gridSize * 1.1);
+  meshCols = floor(width / gridSize) + 1;
+  meshRows = floor(height / gridSize) + 1;
 }
 
 function buildCellData() {
@@ -108,7 +116,8 @@ function drawMesh() {
   
   if (ANIMATE_FIELD) zOff += FIELD_DRIFT;
   
-  let scl = 0.0008; 
+  // We divide the noise scale by logoScale so the "waves" stay visually identical on big screens
+  let scl = 0.0008 / logoScale; 
   let bands = 9;    
   
   for (let i = 0; i < cellData.length; i++) {
@@ -134,7 +143,7 @@ function drawMesh() {
     
     if (!isOuter && !isInner && !isCore && !isFiller && !isOutsideBg) continue; 
     
-    let eps = 8.0;
+    let eps = 8.0 * logoScale;
     let dx = noise((px + eps) * scl, py * scl, zOff) - noise((px - eps) * scl, py * scl, zOff);
     let dy = noise(px * scl, (py + eps) * scl, zOff) - noise(px * scl, (py - eps) * scl, zOff);
     let angle = atan2(dy, dx) + HALF_PI;
@@ -144,38 +153,37 @@ function drawMesh() {
     rotate(angle);
     
     let faintAlpha = nearEdge ? 255 : (inLogo ? 220 : 10); 
-    let thickNoise = noise(px * 0.02, py * 0.02, zOff * 1.5);
+    // Scale the noise reading coordinates too
+    let thickNoise = noise(px * (0.02 / logoScale), py * (0.02 / logoScale), zOff * 1.5);
     
     if (isOuter) {
       stroke(255, faintAlpha);
-      strokeWeight(map(thickNoise, 0, 1, 0.5, nearEdge ? 3.0 : 1.2)); 
+      strokeWeight(map(thickNoise, 0, 1, 0.5 * logoScale, nearEdge ? 3.0 * logoScale : 1.2 * logoScale)); 
       line(-gridSize / 2, 0, gridSize / 2, 0); 
     }
     else if (isInner) {
       stroke(255, faintAlpha * 0.9);
-      strokeWeight(map(thickNoise, 0, 1, 0.2, nearEdge ? 2.0 : 0.8));
+      strokeWeight(map(thickNoise, 0, 1, 0.2 * logoScale, nearEdge ? 2.0 * logoScale : 0.8 * logoScale));
       line(-gridSize / 2, 0, gridSize / 2, 0); 
     }
     else if (isCore) {
       if (inLogo || nearEdge) {
-        let packet = noise(px * 0.01, py * 0.01, GLYPH_STATIC_Z); 
+        let packet = noise(px * (0.01 / logoScale), py * (0.01 / logoScale), GLYPH_STATIC_Z); 
         if (packet > 0.25) { 
-          let baseScale = map(packet, 0.25, 0.8, 0.7, 2.5); 
+          let baseShapeScale = map(packet, 0.25, 0.8, 0.7, 2.5); 
           let randScale = map(seed % 10, 0, 9, 0.8, 1.2);
-          let dynScale = constrain(baseScale * randScale, 0.6, 2.8);
+          let dynScale = constrain(baseShapeScale * randScale, 0.6, 2.8);
           
           push();
           rotate(-angle); 
           
-          // --- UPDATED: Scale is now applied specifically to each shape ---
           if (seed < 25) {
-            // Cap the text scale at 0.9 so it never overlaps the surrounding grid cells
-            scale(min(dynScale, 0.9)); 
+            scale(min(dynScale, 0.9)); // Keep text from overlapping
             fill(255, nearEdge ? 255 : 220);
             noStroke();
             text((seed % 2 === 0) ? '1' : '0', 0, 0);
           } else if (seed < 50) {
-            scale(dynScale); // Let the abstract shapes grow normally
+            scale(dynScale); 
             fill(255, nearEdge ? 255 : 200);
             noStroke();
             circle(-gridSize * 0.2, 0, gridSize * 0.2);
@@ -199,7 +207,7 @@ function drawMesh() {
         } else {
           fill(255, nearEdge ? 180 : 80);
           noStroke();
-          circle(0, 0, map(packet, 0, 0.25, 0.5, 1.8)); 
+          circle(0, 0, map(packet, 0, 0.25, 0.5, 1.8 * logoScale)); 
         }
       } else if (isOutsideBg) {
         fill(255, 4); 
@@ -216,7 +224,7 @@ function drawMesh() {
        noStroke();
        push();
        rotate(-angle);
-       circle(0, 0, map(seed % 3, 0, 2, 1.0, 2.5));
+       circle(0, 0, map(seed % 3, 0, 2, 1.0 * logoScale, 2.5 * logoScale));
        pop();
     }
     pop();
